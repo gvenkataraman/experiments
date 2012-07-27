@@ -5,7 +5,8 @@ Schema in redis:
     key = <word>, value = idf
     key = post_id value = set of tags
     key = '__c__<post_id>' value = computed tags as tuples <tag, frequency>
-    key = '__c__<word>' value = posting list
+    key = '__p__<word>' value = posting list
+    key = '__f__<word>' value = idf for computed_tags
 """
 from __future__ import unicode_literals
 from __future__ import division
@@ -34,38 +35,80 @@ def stop_words():
     return words
 
 
+def _add_word_to_posting_list(word, posting_list, post_id):
+    posting_list_str = '__p__' + word
+    try:
+        current_posting_list = posting_list[posting_list_str]
+    except KeyError:
+        current_posting_list = set()
+        posting_list[posting_list_str] = current_posting_list
+    current_posting_list.add(post_id)
+
+
 def store_tags(stop_words):
+    """
+    1. key = 'word', value = idf - Done
+    2. key = post_id value = set of tags - Done
+    3. key = '__c__<post_id>' value = computed tags as tuples <tag, frequency> - Done
+    4. key = '__p__<word>' value = posting list
+    5. key = '__f__<word>' value = idf for computed_tags
+    """
     import time
     fptr = open(sys.argv[1], 'rb')
     start = time.clock()
     line_count = 0
     idf = defaultdict(int)
-    computed_tags = dict()
+    idf_computed_tags = defaultdict(int)
+    #computed_tags = dict()
+    posting_list = dict()
 
     for line in fptr.readlines(): 
         if ((line_count % 10000) == 0):
             end = time.clock()
             minutes = (end - start) / 60.0
             print 'Done with %d took %f min. ' %(line_count, minutes)
+
         line_count += 1
         data = json.loads(line)
         tags = data.get('tags')
-        post_id = data['post_id']
+        post_id = int(data['post_id'])
+        tag_set = set()
         if tags:
-            R_SERVER.set(int(post_id), set(tags))
+            tag_set = set([t.lower() for t in tags if t])
+            # number_2
+            R_SERVER.set(post_id, tag_set)
+
         for tag in tags:
+            if not tag:
+                continue
             idf[tag] += 1
+            _add_word_to_posting_list(tag, posting_list, post_id)
+
         content = data['content']
-        tags = utils.compute_tags_from_text(content, stop_words)
-        if tags:
+        computed_tags = utils.compute_tags_from_text(content, stop_words)
+        if computed_tags:
             key = '__c__' + str(post_id)
-            computed_tags[key] = tags
+            # number_3
+            R_SERVER.set(key, computed_tags)
+
+            for tag in computed_tags:
+                word = tag[0]
+                idf_computed_tags[word] += 1
+                _add_word_to_posting_list(word, posting_list, post_id)
 
     for tag, count in idf.iteritems():
+        # number_1
         R_SERVER.set(tag, count)
 
-    for tag, value in computed_tags.iteritems():
-        R_SERVER.set(tag, value)
+    for tag, count in idf_computed_tags.iteritems():
+        tag_str = '__f__' + tag
+        # number_5
+        R_SERVER.set(tag_str, count)
+
+    for tag, current_list in posting_list.iteritems():
+        tag_str = '__p__' + tag
+        # number_4
+        R_SERVER.set(tag_str, current_list)
 
     R_SERVER.bgsave()
 
