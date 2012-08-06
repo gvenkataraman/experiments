@@ -3,6 +3,7 @@ from __future__ import unicode_literals
 from collections import Counter, defaultdict
 import csv
 import json
+import multiprocessing
 import pandas as pd
 from pyes import ES
 import requests
@@ -69,8 +70,9 @@ def get_posts_liked(likes):
     return posts_liked
 
 
-def predict(conn, fname, max_users, stop_words):
+def predict(fname, max_users, stop_words, output_fname):
 
+    conn = ES(["localhost:9200"])
     fptr = open(fname, 'rb')
     tail = ''
     for word in stop_words:
@@ -78,16 +80,29 @@ def predict(conn, fname, max_users, stop_words):
     tail = tail[0:-1]
     start = time.clock()
     numb_computed = 0
-    max_like_count = 20
-    max_to_be_computed = 1000
+    max_like_count = 50 
+    max_to_be_computed = 200 
+    fptr_out = open(output_fname, 'wb')
 
     for line in fptr:
-        data = json.loads(line)
-        if not data.get('inTestSet'):
+        try:
+            data = json.loads(line)
+        except ValueError: 
+            print 'Value error on json read'
+            print line
             continue
+        data = json.loads(line)
+        in_test_set = data.get('inTestSet')
+        
+        if not in_test_set:
+            continue
+        if ((numb_computed % 100) == 0):
+            end = time.clock()
+            minutes = (end - start) / 60.0
+            print 'File: %s Done with %d took %f min. ' %(output_fname, numb_computed, minutes)
         numb_computed += 1
-        if numb_computed > max_to_be_computed:
-            break
+        #if numb_computed > max_to_be_computed:
+        #    break
         likes = data.get('likes')
         posts_liked = get_most_recent_likes(likes, max_like_count)
         tag_score = defaultdict(float)
@@ -107,37 +122,55 @@ def predict(conn, fname, max_users, stop_words):
 
         counter = Counter(tag_score)
         numb_recommendation_found = len(counter.keys())
-        recommended_posts = set()
-        numb_common = 0
+        recommended_posts = list()
+        numb_liked = len(posts_liked)
         if numb_recommendation_found:
-            common = counter.most_common(max_users)
-            posts = set()
-            for c in common:
-                posts.add(c[0])
-            recommended_posts = posts.difference(posts_liked)
-            numb_common = len(posts.intersection(posts_liked))
+            common = counter.most_common(max_users+numb_liked)
+            recommended_posts = [str(c[0]) for c in common if c not in posts_liked]
+        uid = data['uid']
+        recommended_string = str(uid) + ', ' + ' '.join(recommended_posts[:max_users])
+        #print 'number posts liked %d recommended: %d ' %(len(posts_liked), len(recommended_posts))
+        fptr_out.write(recommended_string)
+        fptr_out.write('\n')
+        
     end = time.clock()
     time_taken = (end - start) / 60.0
-    print ' time taken ', time_taken
-    print 'numb completed ', numb_computed
-
+    fptr_out.close()
+    print ' time taken: %f file: %s numb completed', time_taken, output_fname, numb_computed
 
 
 if __name__ == '__main__':
     """
-    predict trainUsers.json stop_words.csv
+    predict trainUsers.json stop_words.csv output.csv
+    predict <f1> <f2> ...<f8> stop_words.csv output.csv
     """
-    fname = sys.argv[1]
+    stop_words_file = sys.argv[-1]
     conn = ES(["localhost:9200"])
 
     stop_words = list()
-    with open(sys.argv[2], 'rb') as f:
+    with open(stop_words_file, 'rb') as f:
         fptr1 = csv.reader(f)
         for row in fptr1:
             for col in row:
                 stop_words.append(col)
     max_users = 100
-    predict(fname=fname, 
-            conn=conn, 
-            max_users=max_users, 
-            stop_words=stop_words)
+    index = 0
+    jobs = list()
+    if len(sys.argv) == 3:
+        predict(
+            fname=sys.argv[1],
+            max_users=max_users,
+            stop_words=stop_words,
+            output_fname='output0.csv',
+        )
+    else:
+        for fname in sys.argv[1:-1]:
+            output_fname = 'output' + str(index) + '.csv'
+            p = multiprocessing.Process(
+                target=predict,
+                args=(fname, max_users, stop_words, output_fname)
+            )
+            index += 1
+            jobs.append(p)
+            p.start()
+

@@ -14,6 +14,7 @@ from __future__ import division
 from collections import defaultdict
 import csv
 import json
+import multiprocessing
 import redis
 import sys
 import utils
@@ -45,7 +46,7 @@ def _add_word_to_posting_list(word, posting_list, post_id):
     current_posting_list.add(post_id)
 
 
-def store_tags(stop_words):
+def store_tags(stop_words, fname):
     """
     1. key = 'word', value = idf - Done
     2. key = post_id value = set of tags - Done
@@ -54,7 +55,7 @@ def store_tags(stop_words):
     5. key = '__f__<word>' value = idf for computed_tags
     """
     import time
-    fptr = open(sys.argv[1], 'rb')
+    fptr = open(fname, 'rb')
     start = time.clock()
     line_count = 0
     idf = defaultdict(int)
@@ -62,11 +63,11 @@ def store_tags(stop_words):
     #computed_tags = dict()
     posting_list = dict()
 
-    for line in fptr.readlines(): 
+    for line in fptr:
         if ((line_count % 10000) == 0):
             end = time.clock()
             minutes = (end - start) / 60.0
-            print 'Done with %d took %f min. ' %(line_count, minutes)
+            print 'file: %s Done with %d took %f min. ' %(fname, line_count, minutes)
 
         line_count += 1
         data = json.loads(line)
@@ -98,18 +99,25 @@ def store_tags(stop_words):
 
     for tag, count in idf.iteritems():
         # number_1
-        R_SERVER.set(tag, count)
+        current_count = R_SERVER.get(tag)
+        total_count = (count + int(current_count)) if current_count else count
+        R_SERVER.set(tag, total_count)
 
     for tag, count in idf_computed_tags.iteritems():
         tag_str = '__f__' + tag
         # number_5
-        R_SERVER.set(tag_str, count)
+        current_count = R_SERVER.get(tag_str)
+        total_count = (count + int(current_count)) if current_count else count
+        R_SERVER.set(tag_str, total_count)
 
     for tag, current_list in posting_list.iteritems():
         tag_str = '__p__' + tag
         # number_4
-        R_SERVER.set(tag_str, current_list)
+        stored_list = R_SERVER.get(tag_str)
+        new_list = stored_list.extend(current_list) if stored_list else current_list 
+        R_SERVER.set(tag_str, new_list)
 
+    fptr.close()
     R_SERVER.bgsave()
 
 
@@ -118,4 +126,15 @@ if __name__ == '__main__':
     sys.argv[1] --> testPosts.json
     """
     stop_words = stop_words()
-    store_tags(stop_words)
+    if len(sys.argv) == 2:
+        store_tags(stop_words, sys.argv[1])
+    else:
+        jobs = list()
+        for fname in sys.argv[1:]:
+            print fname
+            p = multiprocessing.Process(
+                target=store_tags,
+                args=(stop_words, fname)
+            )
+            jobs.append(p)
+            p.start()
