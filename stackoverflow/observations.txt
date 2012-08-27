@@ -1,0 +1,17 @@
+OwnerUndeletedAnswerCountAtPostTime, perc_unopen
+==0, 59.23
+<2, 57.29
+<3, 56.17
+>=100, 33
+>=10, 38.42
+>= 500, 33.0
+>==1000, 30.59 
+
+Results:
+
+Desicion tree with following features:
+
+features = ('num_tags', 
+            'reputation', 'undeleted_answer_count',
+            'user_age')
+0.76
