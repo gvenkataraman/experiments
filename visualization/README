@@ -1,0 +1,3 @@
+How to visualize?
+- python simple.py 
+- dot -Tpng simple.dot -o simple.png
